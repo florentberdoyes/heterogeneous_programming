@@ -18,6 +18,45 @@ double gaussian(double x, double sigma) {
     return exp(-(x * x) / (2.0 * sigma * sigma));
 }
 
+__global__ void bilateral_filter_kernel(
+    unsigned char *src, unsigned char *dst, int width, int height, int channels,
+    int radius, int d, double sigma_color, double *spatial_weights) {
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= radius && x < width - radius && y >= radius && y < height - radius) {
+        double weight_sum[3] = {0.0, 0.0, 0.0};
+        double filtered_value[3] = {0.0, 0.0, 0.0};
+
+        unsigned char *center_pixel = src + (y * width + x) * channels;
+
+        for (int i = 0; i < d; i++) {
+            for (int j = 0; j < d; j++) {
+                int nx = x + j - radius;
+                int ny = y + i - radius;
+
+                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                    unsigned char *neighbor_pixel = src + (ny * width + nx) * channels;
+
+                    for (int c = 0; c < channels; c++) {
+                        double range_weight = exp(-(pow((double)(neighbor_pixel[c] - center_pixel[c]), 2)) / (2.0 * sigma_color * sigma_color));
+                        double weight = spatial_weights[i * d + j] * range_weight;
+
+                        filtered_value[c] += neighbor_pixel[c] * weight;
+                        weight_sum[c] += weight;
+                    }
+                }
+            }
+        }
+
+        unsigned char *output_pixel = dst + (y * width + x) * channels;
+        for (int c = 0; c < channels; c++) {
+            output_pixel[c] = (unsigned char)(filtered_value[c] / (weight_sum[c] + 1e-6));
+        }
+    }
+}
+
 // Manual bilateral filter
 void bilateral_filter(unsigned char *src, unsigned char *dst, int width, int height, int channels, int d, double sigma_color, double sigma_space) {
     int radius = d / 2;
@@ -48,8 +87,8 @@ void bilateral_filter(unsigned char *src, unsigned char *dst, int width, int hei
     cudaMalloc((void **)&d_spatial_weights, weight_size);
 
     // Copy data to GPU
-    cudaMemcpy(d_src, h_src, image_size, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_spatial_weights, h_spatial_weights, weight_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_src, src, image_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_spatial_weights, spatial_weights, weight_size, cudaMemcpyHostToDevice);
 
     // Define grid and block sizes
     dim3 block(BLOCK_SIZE, BLOCK_SIZE);
@@ -59,7 +98,7 @@ void bilateral_filter(unsigned char *src, unsigned char *dst, int width, int hei
     bilateral_filter_kernel<<<grid, block>>>(d_src, d_dst, width, height, channels, radius, 2 * radius + 1, sigma_color, d_spatial_weights);
 
     // Copy the result back to CPU
-    cudaMemcpy(h_dst, d_dst, image_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(dst, d_dst, image_size, cudaMemcpyDeviceToHost);
 
     // Free GPU memory
     cudaFree(d_src);
@@ -124,42 +163,5 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-__global__ void bilateral_filter_kernel(
-    unsigned char *src, unsigned char *dst, int width, int height, int channels,
-    int radius, int d, double sigma_color, double *spatial_weights) {
 
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if (x >= radius && x < width - radius && y >= radius && y < height - radius) {
-        double weight_sum[3] = {0.0, 0.0, 0.0};
-        double filtered_value[3] = {0.0, 0.0, 0.0};
-
-        unsigned char *center_pixel = src + (y * width + x) * channels;
-
-        for (int i = 0; i < d; i++) {
-            for (int j = 0; j < d; j++) {
-                int nx = x + j - radius;
-                int ny = y + i - radius;
-
-                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                    unsigned char *neighbor_pixel = src + (ny * width + nx) * channels;
-
-                    for (int c = 0; c < channels; c++) {
-                        double range_weight = exp(-(pow((double)(neighbor_pixel[c] - center_pixel[c]), 2)) / (2.0 * sigma_color * sigma_color));
-                        double weight = spatial_weights[i * d + j] * range_weight;
-
-                        filtered_value[c] += neighbor_pixel[c] * weight;
-                        weight_sum[c] += weight;
-                    }
-                }
-            }
-        }
-
-        unsigned char *output_pixel = dst + (y * width + x) * channels;
-        for (int c = 0; c < channels; c++) {
-            output_pixel[c] = (unsigned char)(filtered_value[c] / (weight_sum[c] + 1e-6));
-        }
-    }
-}
 
