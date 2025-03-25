@@ -8,6 +8,11 @@
 #include <stdio.h>
 #include <time.h>
 
+// Cuda : 
+#include <iostream>
+#include <cuda_runtime.h>
+#define BLOCK_SIZE 16
+
 // Gaussian function
 double gaussian(double x, double sigma) {
     return exp(-(x * x) / (2.0 * sigma * sigma));
@@ -31,48 +36,36 @@ void bilateral_filter(unsigned char *src, unsigned char *dst, int width, int hei
         }
     }
 
-    // Process image
-    for (int y = radius; y < height - radius; y++) {
-        for (int x = radius; x < width - radius; x++) {
-            double weight_sum[3] = {0.0, 0.0, 0.0};
-            double filtered_value[3] = {0.0, 0.0, 0.0};
+    int image_size = width * height * channels * sizeof(unsigned char);
+    int weight_size = (2 * radius + 1) * (2 * radius + 1) * sizeof(double);
+    
+    // Allocate memory on GPU
+    unsigned char *d_src, *d_dst;
+    double *d_spatial_weights;
 
-            // Get center pixel pointer
-            unsigned char *center_pixel = src + (y * width + x) * channels;
+    cudaMalloc((void **)&d_src, image_size);
+    cudaMalloc((void **)&d_dst, image_size);
+    cudaMalloc((void **)&d_spatial_weights, weight_size);
 
-            // Iterate over local window
-            for (int i = 0; i < d; i++) {
-                for (int j = 0; j < d; j++) {
-                    int nx = x + j - radius;
-                    int ny = y + i - radius;
+    // Copy data to GPU
+    cudaMemcpy(d_src, h_src, image_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_spatial_weights, h_spatial_weights, weight_size, cudaMemcpyHostToDevice);
 
-                    // Bounds check to ensure we're within the image
-                    if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
-                        continue;
-                    }
+    // Define grid and block sizes
+    dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE, (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-                    // Get neighbor pixel pointer
-                    unsigned char *neighbor_pixel = src + (ny * width + nx) * channels;
+    // Launch the CUDA kernel
+    bilateral_filter_kernel<<<grid, block>>>(d_src, d_dst, width, height, channels, radius, 2 * radius + 1, sigma_color, d_spatial_weights);
 
-                    for (int c = 0; c < channels; c++) {
-                        // Compute range weight
-                        double range_weight = gaussian(abs(neighbor_pixel[c] - center_pixel[c]), sigma_color);
-                        double weight = spatial_weights[i * d + j] * range_weight;
+    // Copy the result back to CPU
+    cudaMemcpy(h_dst, d_dst, image_size, cudaMemcpyDeviceToHost);
 
-                        // Accumulate weighted sum
-                        filtered_value[c] += neighbor_pixel[c] * weight;
-                        weight_sum[c] += weight;
-                    }
-                }
-            }
-
-            // Normalize and store result
-            unsigned char *output_pixel = dst + (y * width + x) * channels;
-            for (int c = 0; c < channels; c++) {
-                output_pixel[c] = (unsigned char)(filtered_value[c] / (weight_sum[c] + 1e-6)); // Avoid division by zero
-            }
-        }
-    }
+    // Free GPU memory
+    cudaFree(d_src);
+    cudaFree(d_dst);
+    cudaFree(d_spatial_weights);
+    
 
     free(spatial_weights);
 }
@@ -130,3 +123,43 @@ int main(int argc, char *argv[]) {
     
     return 0;
 }
+
+__global__ void bilateral_filter_kernel(
+    unsigned char *src, unsigned char *dst, int width, int height, int channels,
+    int radius, int d, double sigma_color, double *spatial_weights) {
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= radius && x < width - radius && y >= radius && y < height - radius) {
+        double weight_sum[3] = {0.0, 0.0, 0.0};
+        double filtered_value[3] = {0.0, 0.0, 0.0};
+
+        unsigned char *center_pixel = src + (y * width + x) * channels;
+
+        for (int i = 0; i < d; i++) {
+            for (int j = 0; j < d; j++) {
+                int nx = x + j - radius;
+                int ny = y + i - radius;
+
+                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                    unsigned char *neighbor_pixel = src + (ny * width + nx) * channels;
+
+                    for (int c = 0; c < channels; c++) {
+                        double range_weight = exp(-(pow((double)(neighbor_pixel[c] - center_pixel[c]), 2)) / (2.0 * sigma_color * sigma_color));
+                        double weight = spatial_weights[i * d + j] * range_weight;
+
+                        filtered_value[c] += neighbor_pixel[c] * weight;
+                        weight_sum[c] += weight;
+                    }
+                }
+            }
+        }
+
+        unsigned char *output_pixel = dst + (y * width + x) * channels;
+        for (int c = 0; c < channels; c++) {
+            output_pixel[c] = (unsigned char)(filtered_value[c] / (weight_sum[c] + 1e-6));
+        }
+    }
+}
+
