@@ -26,7 +26,7 @@ __global__ void bilateral_filter_kernel(
 
     // On conserve la structure du code .c en 2 dimensions 
     // On doit donc indexer à la fois sur x et y ce qui fonctionne de la même manière que pour une seule dimension
-        
+    
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     
