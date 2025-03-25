@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
+#include <time.h>
 
 // Gaussian function
 double gaussian(double x, double sigma) {
@@ -83,6 +84,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    clock_t start_time = clock();
+
     int width, height, channels;
     unsigned char *image = stbi_load(argv[1], &width, &height, &channels, 0);
     if (!image) {
@@ -120,6 +123,10 @@ int main(int argc, char *argv[]) {
     stbi_image_free(image);
     free(filtered_image);
 
+    clock_t end_time = clock(); // Fin du timer
+    double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
     printf("Bilateral filtering complete. Output saved as %s\n", argv[2]);
+    printf("Execution time: %.4f seconds\n", elapsed_time);
+    
     return 0;
 }
