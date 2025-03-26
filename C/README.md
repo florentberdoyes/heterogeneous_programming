@@ -1,4 +1,4 @@
-# heterogeneous_programming
+# Fichier C
 
 Pour compiler : 
 
