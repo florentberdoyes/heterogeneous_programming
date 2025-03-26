@@ -1,9 +1,8 @@
-# heterogeneous_programming
+# Fichier CUDA
 
 Pour compiler : 
 
-gcc -o exemple -c exemple.c
-gcc -o exemple exemple.o -lm
+nvcc exemple.cu -o exemple
 
 Pour executer :
 
